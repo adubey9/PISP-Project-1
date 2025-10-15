@@ -1,0 +1,178 @@
+import os
+import hmac
+import hashlib
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import padding
+
+# --- PLACEHOLDER VALUES (Replace with actual Task 3 & 4 outputs) ---
+
+# The session key derived from Task 3 (must be 32 bytes for AES-256)
+SESSION_KEY = b'a' * 32  # 32 bytes (256 bits) for AES-256
+
+# --- IV/Nonce Generation (Similar to a random output from Task 4) ---
+
+def generate_random_iv(block_size=16):
+    """
+    Generates a cryptographically secure Initialization Vector (IV).
+    This mimics a random number generation from Task 4.
+    AES CBC mode requires a 16-byte IV.
+    """
+    return os.urandom(block_size)
+
+# ----------------------------------------------------------------------
+# 1. Functions for Symmetric Encryption and Decryption (Confidentiality)
+# ----------------------------------------------------------------------
+
+def sym_enc(plaintext: bytes, key: bytes) -> tuple[bytes, bytes]:
+    """
+    Encrypts a plaintext message using AES-256-CBC.
+    Outputs the Initialization Vector (IV) and the ciphertext.
+    """
+    # 1. Generate a fresh, random IV
+    iv = generate_random_iv()
+    
+    # 2. Configure the cipher
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+    encryptor = cipher.encryptor()
+    
+    # 3. Apply PKCS7 Padding to the plaintext for CBC mode
+    padder = padding.PKCS7(algorithms.AES.block_size).padder()
+    padded_data = padder.update(plaintext) + padder.finalize()
+    
+    # 4. Encrypt the padded data
+    ciphertext = encryptor.update(padded_data) + encryptor.finalize()
+    
+    return iv, ciphertext
+
+def sym_dec(iv: bytes, ciphertext: bytes, key: bytes) -> bytes:
+    """
+    Decrypts a ciphertext message using AES-256-CBC.
+    Outputs the original plaintext.
+    """
+    # 1. Configure the cipher
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+    decryptor = cipher.decryptor()
+    
+    # 2. Decrypt the ciphertext
+    padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+    
+    # 3. Remove PKCS7 Padding
+    unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
+    plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()
+    
+    return plaintext
+
+# ----------------------------------------------------------------------
+# 2. Function for Computing HMAC (Integrity)
+# ----------------------------------------------------------------------
+
+def compute_hmac(data: bytes, key: bytes) -> bytes:
+    """
+    Computes a Message Authentication Code (MAC) using HMAC-SHA256.
+    """
+    # Simply invoke the standard library's HMAC function
+    h = hmac.new(key, data, hashlib.sha256)
+    return h.digest()
+
+# ----------------------------------------------------------------------
+# 3. Authenticated Encryption (Encrypt-then-MAC: Sender Side)
+# ----------------------------------------------------------------------
+
+def authenticated_encrypt(message: bytes, key: bytes) -> tuple[bytes, bytes, bytes]:
+    """
+    Implements Encrypt-then-MAC (EtM).
+    1. Encrypts the message.
+    2. Computes the MAC over the IV and Ciphertext.
+    Outputs the IV, Ciphertext, and MAC.
+    """
+    # 1. Encrypt the message
+    iv, ciphertext = sym_enc(message, key)
+    
+    # 2. Compute MAC over the IV and the Ciphertext (Data to be authenticated)
+    mac_data = iv + ciphertext
+    tag = compute_hmac(mac_data, key)
+    
+    # The final transmitted package is (IV, Ciphertext, Tag)
+    return iv, ciphertext, tag
+
+# ----------------------------------------------------------------------
+# 4. Decryption Process for Authenticated Encryption (Receiver Side)
+# ----------------------------------------------------------------------
+
+class IntegrityError(Exception):
+    """Custom exception raised when the MAC tag verification fails."""
+    pass
+
+def authenticated_decrypt(iv: bytes, ciphertext: bytes, received_tag: bytes, key: bytes) -> bytes:
+    """
+    Implements the decryption process for EtM.
+    1. Computes / checks the MAC value of the IV + Ciphertext.
+    2. Decrypts the ciphertext ONLY if the MAC is valid.
+    Outputs the original plaintext.
+    """
+    # 1. Compute the expected MAC over the IV and Ciphertext (integrity check)
+    mac_data = iv + ciphertext
+    expected_tag = compute_hmac(mac_data, key)
+    
+    # 2. Verify the received MAC tag against the expected MAC
+    # Use hmac.compare_digest for constant-time comparison (prevents timing attacks)
+    if not hmac.compare_digest(received_tag, expected_tag):
+        # Crucially, STOP the process and do NOT decrypt if integrity check fails.
+        raise IntegrityError("Message authenticity and integrity check failed. The message may have been tampered with.")
+        
+    # 3. If integrity is confirmed, decrypt the ciphertext (confidentiality)
+    plaintext = sym_dec(iv, ciphertext, key)
+    
+    return plaintext
+
+# ----------------------------------------------------------------------
+# Demonstration
+# ----------------------------------------------------------------------
+if __name__ == "__main__":
+    
+    # ------------------ Successful Communication ------------------
+    print("--- Successful Communication (Alice to Bob) ---")
+    
+    message_to_send = b"The secret code is 783321. Meet me at 10:00."
+    print(f"Alice's Message: {message_to_send.decode()}")
+    
+    # Alice (Sender)
+    iv, ct, mac_tag = authenticated_encrypt(message_to_send, SESSION_KEY)
+    print(f"  [Alice] Encrypted Package (IV, CT, Tag) created.")
+    print(f"  IV: {iv.hex()[:8]}... | CT: {ct.hex()[:16]}... | Tag: {mac_tag.hex()[:8]}...")
+    
+    # Bob (Receiver)
+    try:
+        decrypted_message = authenticated_decrypt(iv, ct, mac_tag, SESSION_KEY)
+        print(f"  [Bob] MAC verified successfully.")
+        print(f"  [Bob] Decrypted Message: {decrypted_message.decode()}")
+        print("Communication was successful: Confidentiality & Integrity maintained. ✅")
+    except IntegrityError as e:
+        print(f"  [Bob] ERROR: {e}")
+    except Exception as e:
+        print(f"  [Bob] Decryption ERROR: {e}")
+
+    print("\n" + "-"*50 + "\n")
+
+    # ------------------ Tampered Communication (Integrity Failure) ------------------
+    print("--- Tampered Communication Attempt (Man-in-the-Middle) ---")
+    
+    # Alice sends a new message
+    iv_tamper, ct_tamper, mac_tag_tamper = authenticated_encrypt(b"Original message.", SESSION_KEY)
+    
+    # Attacker modifies the ciphertext in transit
+    # Note: They don't need to know the key to mess up the data!
+    modified_ct = ct_tamper[:-1] + b'X' 
+    print(f"  [Attacker] Ciphertext modified from {ct_tamper.hex()[:8]}... to {modified_ct.hex()[:8]}...")
+
+    # Bob (Receiver)
+    try:
+        # Bob receives (IV, MODIFIED_CT, Original Tag)
+        decrypted_message = authenticated_decrypt(iv_tamper, modified_ct, mac_tag_tamper, SESSION_KEY)
+        print(f"  [Bob] Decrypted Message: {decrypted_message.decode()}")
+    except IntegrityError as e:
+        print(f"  [Bob] MAC verification failed! {e}")
+        print("Communication failed: Integrity check prevented decryption. 🛑")
+    except Exception as e:
+        print(f"  [Bob] Decryption ERROR: {e}")

@@ -1,0 +1,139 @@
+import hashlib
+import random
+from math import gcd
+
+# ------------------ Prime Number Generation ------------------
+
+def is_prime(n):
+    if n < 2:
+        return False
+    for i in range(2, int(n**0.5) + 1):
+        if n % i == 0:
+            return False
+    return True
+
+def generate_prime(start=200, end=300):
+    while True:
+        num = random.randint(start, end)
+        if is_prime(num):
+            return num
+
+# ------------------ Find Modular Inverse ------------------
+
+def modinv(a, m):
+    def egcd(a, b):
+        if a == 0:
+            return (b, 0, 1)
+        else:
+            g, y, x = egcd(b % a, a)
+            return (g, x - (b // a) * y, y)
+    g, x, y = egcd(a, m)
+    if g != 1:
+        raise Exception('Modular inverse does not exist')
+    return x % m
+
+# ------------------ RSA Key Pair Generation ------------------
+
+def Key():
+    p = generate_prime()
+    q = generate_prime()
+    while p == q:
+        q = generate_prime()
+    
+    N = p * q
+    phi = (p - 1) * (q - 1)
+    
+    e = random.randrange(3, phi)
+    while gcd(e, phi) != 1:
+        e = random.randrange(3, phi)
+    
+    d = modinv(e, phi)
+    return (e, N), (d, N)
+
+# ------------------ Hashing Function ------------------
+
+def H(M):
+    return int.from_bytes(hashlib.sha256(M.encode()).digest(), byteorder='big')
+
+# ------------------ Signing Function ------------------
+
+def Sign(private_key, M):
+    d, N = private_key
+    hashed = H(M)
+    signature = pow(hashed, d, N)
+    return signature
+
+# ------------------ Signature Verification ------------------
+
+def Verify(public_key, M, signature):
+    e, N = public_key
+    hashed = H(M)
+    verified = pow(signature, e, N)
+    return 1 if verified == hashed % N else 0
+
+# ------------------ Choose Key for Verification ------------------
+
+def select_and_verify(alice_public, bob_public, message, signature):
+    print("Choose which public key to use for verifying the signature:")
+    print("1 - Alice's Public Key")
+    print("2 - Bob's Public Key")
+    
+    try:
+        choice = int(input("Enter your choice (1 or 2): "))
+    except ValueError:
+        print("Invalid input. Please enter 1 or 2.")
+        return 0
+
+    if choice == 1:
+        print("Verifying with Alice's public key.")
+        return Verify(alice_public, message, signature)
+    elif choice == 2:
+        print("Verifying with Bob's public key.")
+        return Verify(bob_public, message, signature)
+    else:
+        print("Invalid selection.")
+        return 0
+
+# ------------------ Key Derivation Function (KDF) ------------------
+
+def derive_key(shared_secret: str, iterations: int) -> bytes:
+    """
+    Repeatedly hash the shared secret using SHA-256 for a set number of times.
+
+    Args:
+        shared_secret (str): The input secret string.
+        iterations (int): How many times to apply the hash.
+
+    Returns:
+        bytes: Final derived key in bytes.
+    """
+    key = shared_secret.encode('utf-8')
+    for _ in range(iterations):
+        key = hashlib.sha256(key).digest()
+    return key
+
+# ------------------ Main Program ------------------
+
+if __name__ == "__main__":
+    # Generate RSA keys for Alice and Bob
+    alice_public, alice_private = Key()
+    bob_public, bob_private = Key()
+
+    print("Alice's Public Key:", alice_public)
+    print("Bob's Public Key:", bob_public)
+
+    # Prepare message and generate signature
+    message = "Hi Astha"
+    signature = Sign(alice_private, message)
+    print("\nMessage:", message)
+    print("Signature by Alice:", signature)
+
+    # Ask user to verify signature using selected public key
+    verification_result = select_and_verify(alice_public, bob_public, message, signature)
+    print("Verification Result:", verification_result)
+
+    # Optional: derive a shared key from a secret
+    shared_secret = "shared_key_between_alice_and_bob"
+    iterations = 10000
+    derived_key = derive_key(shared_secret, iterations)
+    print("\nDerived Key (hex):", derived_key.hex())
